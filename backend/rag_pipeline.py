@@ -15,11 +15,19 @@ import tempfile
 from typing import List, Tuple
 
 import requests
-import google.generativeai as genai
-from langchain.embeddings.base import Embeddings
+try:
+    from langchain_core.embeddings import Embeddings
+except ImportError:
+    from langchain.embeddings.base import Embeddings
+
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+except ImportError:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+
 from dotenv import load_dotenv
 
 from database import get_collection, VECTOR_INDEX_NAME
