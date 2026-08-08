@@ -33,12 +33,7 @@ from dotenv import load_dotenv
 from database import get_collection, VECTOR_INDEX_NAME
 from models import Citation
 
-load_dotenv()
-
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-
-# Configure google-generativeai to use REST (not gRPC)
-genai.configure(api_key=GEMINI_API_KEY, transport="rest")
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 EMBEDDING_MODELS = [
@@ -150,11 +145,6 @@ class GeminiRESTEmbeddings(Embeddings):
 
 _embeddings = GeminiRESTEmbeddings(api_key=GEMINI_API_KEY)
 
-_model = genai.GenerativeModel(
-    model_name=LLM_MODEL,
-    generation_config=genai.GenerationConfig(temperature=0.2),
-)
-
 _splitter = RecursiveCharacterTextSplitter(
     chunk_size=1000,
     chunk_overlap=200,
@@ -185,7 +175,7 @@ def ingest_pdf(file_bytes: bytes, filename: str) -> dict:
     Ingest a PDF into MongoDB Atlas Vector Search.
     Returns a dict with filename, chunk count, page count, and meticulous timing stats.
     """
-    import math, time
+    import math
     t0 = time.time()
     file_size_mb = round(len(file_bytes) / (1024 * 1024), 2)
 
@@ -268,7 +258,22 @@ def chat_with_rag(message: str) -> Tuple[str, List[Citation]]:
         "Provide a comprehensive, well-structured answer."
     )
 
-    response = _model.generate_content(prompt)
+    # ---- Direct REST Call to Gemini LLM ----
+    url = f"{GEMINI_BASE_URL}/{LLM_MODEL}:generateContent"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2}
+    }
+    
+    resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+
+    answer_text = ""
+    try:
+        answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError):
+        answer_text = "Generated response payload was empty."
 
     # ---- Deduplicated citations ----
     citations: List[Citation] = []
@@ -281,4 +286,4 @@ def chat_with_rag(message: str) -> Tuple[str, List[Citation]]:
             seen.add(key)
             citations.append(Citation(source=source, page=page, text=doc.page_content[:500]))
 
-    return response.text, citations
+    return answer_text, citations
