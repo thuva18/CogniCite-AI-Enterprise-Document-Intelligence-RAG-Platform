@@ -77,7 +77,10 @@ export default function Sidebar({
     setShowInspector(true)
 
     try {
-      const res = await uploadFiles(pdfFiles)
+      const formData = new FormData()
+      pdfFiles.forEach((file) => formData.append('files', file))
+      
+      const res = await uploadFiles(formData)
       setUploading(false)
       setUploadStatus('success')
       if (res.documents && res.documents.length > 0) {

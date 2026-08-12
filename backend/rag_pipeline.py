@@ -4,17 +4,21 @@ Handles PDF ingestion and conversational retrieval with structured citations.
 
 Uses pure REST API calls for all Gemini interactions:
 - Embeddings: gemini-embedding-001 via REST (768 dims, outputDimensionality=768)
-- LLM:        gemini-1.5-pro via google-generativeai SDK (configured with REST transport)
-
-gRPC transport (langchain_google_genai default) causes Deadline Exceeded on many
-networks. The REST approach is reliable and confirmed working.
+- LLM:        gemini-flash-latest via direct REST POST (no gRPC, no SDK dependency)
 """
 
+import math
 import os
 import tempfile
-from typing import List, Tuple
+import time
+from typing import List, Optional, Tuple
 
 import requests
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
 try:
     from langchain_core.embeddings import Embeddings
 except ImportError:
@@ -28,13 +32,14 @@ try:
 except ImportError:
     from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-from dotenv import load_dotenv
-
 from database import get_collection, VECTOR_INDEX_NAME
 from models import Citation
 
-GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
 
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 EMBEDDING_MODELS = [
     "gemini-embedding-2",
@@ -42,7 +47,7 @@ EMBEDDING_MODELS = [
     "gemini-embedding-001",
 ]
 EMBEDDING_DIMS = 768
-LLM_MODEL      = "gemini-flash-latest"
+LLM_MODEL = "gemini-2.0-flash"
 
 
 # ---------------------------------------------------------------------------
@@ -52,17 +57,15 @@ LLM_MODEL      = "gemini-flash-latest"
 class GeminiRESTEmbeddings(Embeddings):
     """
     LangChain-compatible Embeddings using Gemini REST API with automatic
-    multi-model rate-limit (429) fallback. If model 1 hits rate limit,
-    it automatically switches to model 2 or 3 instantly without failing.
+    multi-model rate-limit (429) fallback. If all Gemini models hit 429,
+    falls back to local FastEmbed ONNX 768d model.
     """
 
     def __init__(self, api_key: str, dims: int = EMBEDDING_DIMS):
         self.api_key = api_key
-        self.dims    = dims
+        self.dims = dims
 
     def _embed_batch_with_fallback(self, texts: List[str]) -> List[List[float]]:
-        import time
-
         last_error = None
         for global_attempt in range(3):
             for model in EMBEDDING_MODELS:
@@ -89,7 +92,7 @@ class GeminiRESTEmbeddings(Embeddings):
                         data = resp.json()
                         return [e["values"] for e in data.get("embeddings", [])]
                     if resp.status_code == 429:
-                        print(f"⚠️ {model} 429 Rate Limit (attempt {global_attempt + 1}). Trying next model / waiting 5s...")
+                        print(f"⚠️ {model} 429 Rate Limit (attempt {global_attempt + 1}). Trying next model…")
                         last_error = f"Rate limit (429) on {model}"
                         time.sleep(2)
                         continue
@@ -98,10 +101,10 @@ class GeminiRESTEmbeddings(Embeddings):
                     last_error = exc
                     time.sleep(1)
 
-            # If all Gemini REST models hit 429, fall back to local FastEmbed (ONNX 768d)
+            # All Gemini models hit 429 → fall back to local FastEmbed ONNX 768d
             try:
                 from fastembed import TextEmbedding
-                print("⚡ Gemini API rate-limited. Using local FastEmbed (ONNX 768d) for vector generation...")
+                print("⚡ Gemini rate-limited. Falling back to local FastEmbed ONNX 768d…")
                 local_model = TextEmbedding(model_name="nomic-ai/nomic-embed-text-v1.5")
                 vec_gen = list(local_model.embed(texts))
                 results = []
@@ -114,25 +117,24 @@ class GeminiRESTEmbeddings(Embeddings):
                     results.append(v_list)
                 return results
             except Exception as local_err:
-                print(f"⚠️ Local FastEmbed fallback note: {local_err}")
+                print(f"⚠️ FastEmbed fallback error: {local_err}")
 
-            print(f"⏳ Waiting 5s for Gemini rate-limit window to reset (pass {global_attempt + 1}/3)...")
+            print(f"⏳ Waiting 5s for rate-limit reset (pass {global_attempt + 1}/3)…")
             time.sleep(5)
 
-        raise RuntimeError(f"Gemini API Rate Limit (429) or Connection Error: {last_error}. Please wait 30 seconds and try uploading again.")
+        raise RuntimeError(
+            f"Gemini API Rate Limit or Connection Error: {last_error}. "
+            "Please wait 30 seconds and try again."
+        )
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        import time
-        batch_size = 90  # 90 chunks per single REST request
+        batch_size = 90
         all_embeddings: List[List[float]] = []
-
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
-            embeddings = self._embed_batch_with_fallback(batch)
-            all_embeddings.extend(embeddings)
+            all_embeddings.extend(self._embed_batch_with_fallback(batch))
             if i + batch_size < len(texts):
-                time.sleep(1.2)  # Smooth 1.2s pacing to stay strictly within 15 RPM free tier limits
-
+                time.sleep(1.2)  # Stay within 15 RPM free-tier limit
         return all_embeddings
 
     def embed_query(self, text: str) -> List[float]:
@@ -140,7 +142,7 @@ class GeminiRESTEmbeddings(Embeddings):
 
 
 # ---------------------------------------------------------------------------
-# Shared instances
+# Shared singletons
 # ---------------------------------------------------------------------------
 
 _embeddings = GeminiRESTEmbeddings(api_key=GEMINI_API_KEY)
@@ -172,10 +174,9 @@ def _get_vector_store() -> MongoDBAtlasVectorSearch:
 
 def ingest_pdf(file_bytes: bytes, filename: str) -> dict:
     """
-    Ingest a PDF into MongoDB Atlas Vector Search.
-    Returns a dict with filename, chunk count, page count, and meticulous timing stats.
+    Extract, chunk, embed, and store a PDF document in MongoDB Atlas Vector Search.
+    Returns a metadata dict with processing telemetry.
     """
-    import math
     t0 = time.time()
     file_size_mb = round(len(file_bytes) / (1024 * 1024), 2)
 
@@ -184,12 +185,17 @@ def ingest_pdf(file_bytes: bytes, filename: str) -> dict:
         tmp_path = tmp.name
 
     try:
+        # Primary loader
         try:
             loader = PyPDFLoader(tmp_path)
             pages = loader.load()
         except Exception:
+            pages = []
+
+        # Fallback stream parser
+        if not pages:
             from pypdf import PdfReader
-            from langchain.schema import Document
+            from langchain_core.documents import Document
             reader = PdfReader(tmp_path)
             pages = []
             for idx, page in enumerate(reader.pages):
@@ -200,7 +206,6 @@ def ingest_pdf(file_bytes: bytes, filename: str) -> dict:
             page.metadata["source"] = filename
 
         chunks = _splitter.split_documents(pages)
-        # Filter out empty whitespace chunks
         chunks = [c for c in chunks if c.page_content and c.page_content.strip()]
 
         if chunks:
@@ -223,13 +228,17 @@ def ingest_pdf(file_bytes: bytes, filename: str) -> dict:
         os.unlink(tmp_path)
 
 
-def chat_with_rag(message: str) -> Tuple[str, List[Citation]]:
+def chat_with_rag(
+    message: str,
+    history: Optional[List[dict]] = None,
+) -> Tuple[str, List[Citation]]:
     """
-    Perform retrieval-augmented generation for a user query.
+    Perform retrieval-augmented generation.
+    Accepts optional conversation history for multi-turn context.
     Returns answer (Markdown) and deduplicated citations.
     """
     vs = _get_vector_store()
-    docs = vs.similarity_search(message, k=4)
+    docs = vs.similarity_search(message, k=5)
 
     if not docs:
         return (
@@ -238,15 +247,25 @@ def chat_with_rag(message: str) -> Tuple[str, List[Citation]]:
             [],
         )
 
-    # ---- Build context ----
+    # Build context from retrieved chunks
     context_blocks: List[str] = []
     for i, doc in enumerate(docs, 1):
         src = doc.metadata.get("source", "Unknown")
-        pg  = int(doc.metadata.get("page", 0)) + 1
+        pg = int(doc.metadata.get("page", 0)) + 1
         context_blocks.append(f"[Excerpt {i} — {src}, Page {pg}]\n{doc.page_content}")
     context = "\n\n---\n\n".join(context_blocks)
 
-    # ---- Prompt ----
+    # Build conversation history string
+    history_text = ""
+    if history:
+        history_lines = []
+        for turn in history[-6:]:  # Last 3 exchanges (6 messages)
+            role = "User" if turn.get("role") == "user" else "Assistant"
+            history_lines.append(f"{role}: {turn.get('content', '')}")
+        if history_lines:
+            history_text = "Previous conversation:\n" + "\n".join(history_lines) + "\n\n"
+
+    # Build full prompt
     prompt = (
         "You are CogniCite, an expert AI document analyst for enterprise teams. "
         "Answer the user's question thoroughly and accurately using ONLY the provided document excerpts. "
@@ -254,18 +273,20 @@ def chat_with_rag(message: str) -> Tuple[str, List[Citation]]:
         "headers (##) for sections, and code blocks where appropriate. "
         "If the excerpts don't contain enough information, say so clearly rather than guessing.\n\n"
         f"Document excerpts:\n\n{context}\n\n"
-        f"---\n\nQuestion: {message}\n\n"
+        "---\n\n"
+        f"{history_text}"
+        f"Current question: {message}\n\n"
         "Provide a comprehensive, well-structured answer."
     )
 
-    # ---- Direct REST Call to Gemini LLM ----
+    # Direct REST call to Gemini LLM
     url = f"{GEMINI_BASE_URL}/{LLM_MODEL}:generateContent"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2}
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048},
     }
-    
-    resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=60)
+
+    resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=90)
     resp.raise_for_status()
     data = resp.json()
 
@@ -273,15 +294,15 @@ def chat_with_rag(message: str) -> Tuple[str, List[Citation]]:
     try:
         answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError):
-        answer_text = "Generated response payload was empty."
+        answer_text = "The model returned an empty response. Please try again."
 
-    # ---- Deduplicated citations ----
+    # Deduplicated citations
     citations: List[Citation] = []
     seen: set = set()
     for doc in docs:
         source = doc.metadata.get("source", "Unknown")
-        page   = int(doc.metadata.get("page", 0)) + 1
-        key    = f"{source}||{page}"
+        page = int(doc.metadata.get("page", 0)) + 1
+        key = f"{source}||{page}"
         if key not in seen:
             seen.add(key)
             citations.append(Citation(source=source, page=page, text=doc.page_content[:500]))

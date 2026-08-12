@@ -5,13 +5,12 @@ Exposes REST endpoints for PDF ingestion, RAG chat, context management, and heal
 
 import os
 from contextlib import asynccontextmanager
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from database import clear_collection, count_documents, ping_mongodb
 from models import (
@@ -32,7 +31,10 @@ load_dotenv()
 
 ALLOWED_ORIGINS: List[str] = [
     o.strip()
-    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000").split(",")
+    for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000,*",
+    ).split(",")
 ]
 MAX_FILE_SIZE_MB = 20
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
@@ -56,13 +58,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CogniCite AI",
     description="Enterprise Document Intelligence & RAG Platform",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -76,11 +78,11 @@ app.add_middleware(
 @app.get("/api/health", response_model=HealthResponse, tags=["System"])
 async def health_check():
     """Return service health and MongoDB connection status."""
-    mongo_ok = ping_mongodb()
+    mongo_ok = await run_in_threadpool(ping_mongodb)
     return HealthResponse(
         status="healthy" if mongo_ok else "degraded",
         mongodb="connected" if mongo_ok else "unreachable",
-        active_documents=count_documents(),
+        active_documents=await run_in_threadpool(count_documents),
     )
 
 
@@ -93,53 +95,58 @@ async def health_check():
 async def upload_documents(files: List[UploadFile] = File(...)):
     """
     Accept one or more PDF files, embed them, and store vectors in MongoDB Atlas.
-    Max file size: 20 MB per file.
+    Returns partial results — successful files are ingested even if others fail.
     """
     ingested: List[DocumentMeta] = []
+    errors: List[str] = []
 
     for file in files:
-        # Validate MIME type
-        if file.content_type not in ("application/pdf", "application/octet-stream"):
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=f"'{file.filename}' is not a PDF. Only PDF files are accepted.",
-            )
+        # Validate MIME type (allow application/octet-stream for some browsers)
+        content_type = file.content_type or ""
+        if content_type not in ("application/pdf", "application/octet-stream", "") and not file.filename.lower().endswith(".pdf"):
+            errors.append(f"'{file.filename}' is not a PDF.")
+            continue
 
         content = await file.read()
 
-        # Validate file size
         if len(content) > MAX_FILE_SIZE_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"'{file.filename}' exceeds the {MAX_FILE_SIZE_MB} MB limit.",
-            )
+            errors.append(f"'{file.filename}' exceeds the {MAX_FILE_SIZE_MB} MB limit.")
+            continue
 
         try:
             meta = await run_in_threadpool(ingest_pdf, content, file.filename)
             ingested.append(DocumentMeta(**meta))
         except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to process '{file.filename}': {str(exc)}",
-            ) from exc
+            errors.append(f"Failed to process '{file.filename}': {str(exc)}")
 
-    return UploadResponse(documents=ingested)
+    if not ingested and errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="; ".join(errors),
+        )
+
+    return UploadResponse(
+        message=f"Ingested {len(ingested)} document(s) successfully." + (f" Errors: {'; '.join(errors)}" if errors else ""),
+        documents=ingested,
+    )
 
 
 @app.post("/api/chat", response_model=ChatResponse, tags=["Chat"])
 async def chat(request: ChatRequest):
     """
-    Accept a natural-language question and return an AI-generated answer
-    with structured source citations.
+    Accept a natural-language question and conversation history,
+    return an AI-generated answer with structured source citations.
     """
-    if count_documents() == 0:
+    if await run_in_threadpool(count_documents) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No documents are loaded. Please upload at least one PDF first.",
         )
 
     try:
-        answer, citations = await run_in_threadpool(chat_with_rag, request.message)
+        answer, citations = await run_in_threadpool(
+            chat_with_rag, request.message, request.history
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -153,7 +160,7 @@ async def chat(request: ChatRequest):
 async def clear_context():
     """Delete all ingested document vectors from MongoDB, resetting the context."""
     try:
-        deleted = clear_collection()
+        deleted = await run_in_threadpool(clear_collection)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -172,5 +179,4 @@ async def clear_context():
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

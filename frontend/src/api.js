@@ -1,7 +1,11 @@
 import axios from 'axios'
 
 // Dynamically construct backend URL matching current window hostname (localhost or 127.0.0.1)
+// or use VITE_API_URL for production (e.g. Render/Vercel)
 const getBackendUrl = () => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
   return `http://${host}:8000`
 }
@@ -25,6 +29,8 @@ export async function uploadFiles(formData) {
     return data
   } catch (err) {
     if (!err.response) {
+      // Add a small delay for retry backoff
+      await new Promise(resolve => setTimeout(resolve, 1000));
       const { data } = await axios.post(`${getBackendUrl()}/api/upload`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 300000,
@@ -35,13 +41,15 @@ export async function uploadFiles(formData) {
   }
 }
 
-export async function sendChatMessage(message) {
+export async function sendChatMessage(message, history = []) {
   try {
-    const { data } = await axios.post('/api/chat', { message }, { timeout: 120000 })
+    const { data } = await axios.post('/api/chat', { message, history }, { timeout: 120000 })
     return data
   } catch (err) {
     if (!err.response) {
-      const { data } = await axios.post(`${getBackendUrl()}/api/chat`, { message }, { timeout: 120000 })
+      // Add a small delay for retry backoff
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const { data } = await axios.post(`${getBackendUrl()}/api/chat`, { message, history }, { timeout: 120000 })
       return data
     }
     throw err

@@ -2,7 +2,7 @@
 CogniCite AI — Pydantic v2 Request/Response Models
 """
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 
@@ -12,6 +12,10 @@ from pydantic import BaseModel, Field
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000, description="User query")
+    history: Optional[List[Dict[str, Any]]] = Field(
+        default=None, 
+        description="Optional conversation history for multi-turn context. Format: [{'role': 'user'|'assistant', 'content': '...'}]"
+    )
 
 
 # ---------------------------------------------------------------------------
