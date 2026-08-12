@@ -42,9 +42,8 @@ from models import Citation
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 EMBEDDING_MODELS = [
-    "gemini-embedding-2",
-    "gemini-embedding-2-preview",
-    "gemini-embedding-001",
+    "text-embedding-004",
+    "embedding-001",
 ]
 EMBEDDING_DIMS = 768
 LLM_MODEL = "gemini-2.0-flash"
