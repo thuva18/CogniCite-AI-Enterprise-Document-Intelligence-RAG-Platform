@@ -1,20 +1,56 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Bot, FileText, Send, Sparkles, Zap, Shield, BarChart3, HelpCircle, Trash2 } from 'lucide-react'
+import {
+  BarChart3,
+  Bot,
+  CornerDownLeft,
+  FileText,
+  Layers,
+  Send,
+  Shield,
+  Sparkles,
+  Trash2,
+  Zap,
+} from 'lucide-react'
 import { sendChatMessage } from '../api.js'
 import MessageBubble from './MessageBubble.jsx'
 
 const QUICK_PROMPTS = [
-  { icon: '📊', label: 'Key Financial Highlights', prompt: 'Summarize the key financial highlights and revenue figures from the documents.' },
-  { icon: '🏗️', label: 'Architecture & Tech Spec', prompt: 'Explain the technical architecture, vector store setup, and system components.' },
-  { icon: '🔒', label: 'Security & Compliance Guidelines', prompt: 'What are the data privacy, security, and compliance protocols specified?' },
-  { icon: '📋', label: 'Executive Summary', prompt: 'Provide a concise executive summary with key recommendations from the documents.' },
+  {
+    icon: BarChart3,
+    iconColor: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+    title: 'Financial Breakdown',
+    desc: 'Revenue, EBITDA & YoY Growth',
+    prompt: 'Provide a structured summary of key financial figures, revenue, EBITDA, and YoY growth mentioned across the uploaded documents.',
+  },
+  {
+    icon: Zap,
+    iconColor: 'text-brand-400 bg-brand-500/10 border-brand-500/20',
+    title: 'System Architecture',
+    desc: 'Stack, Vector Search & Retrieval',
+    prompt: 'Explain the technical architecture, vector store configuration, chunking strategy, and retrieval flow described in the documents.',
+  },
+  {
+    icon: Shield,
+    iconColor: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
+    title: 'Security & Compliance',
+    desc: 'Data Privacy & Encryption Specs',
+    prompt: 'What are the encryption standards, access controls, and compliance frameworks specified in the documentation?',
+  },
+  {
+    icon: Sparkles,
+    iconColor: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+    title: 'Executive Summary',
+    desc: 'Key Takeaways & Action Items',
+    prompt: 'Generate an executive summary with bulleted key takeaways, strategic priorities, and immediate action items.',
+  },
 ]
 
-/**
- * ChatWindow — Main conversational interface with rich welcome state,
- * quick-prompt chips, and auto-scrolling message thread.
- */
-export default function ChatWindow({ documents, messages, setMessages, onClearChat }) {
+export default function ChatWindow({
+  documents = [],
+  messages = [],
+  setMessages,
+  onClearChat,
+}) {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -22,16 +58,16 @@ export default function ChatWindow({ documents, messages, setMessages, onClearCh
   const inputRef = useRef(null)
   const hasDocuments = documents.length > 0
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages or loading state
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
-  // Auto-resize textarea
+  // Handle textarea auto-resize
   const handleInput = (e) => {
     setInput(e.target.value)
     e.target.style.height = 'auto'
-    e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 140)}px`
   }
 
   const sendMessage = async (text) => {
@@ -39,41 +75,61 @@ export default function ChatWindow({ documents, messages, setMessages, onClearCh
     if (!msg || loading) return
 
     if (!hasDocuments) {
-      setError('Please upload or select a sample PDF document first.')
-      setTimeout(() => setError(''), 4000)
+      setError('Please upload or select a sample PDF document on the left sidebar to start.')
+      setTimeout(() => setError(''), 4500)
       return
     }
 
     setInput('')
     if (inputRef.current) {
-      inputRef.current.style.height = 'auto' // reset height
+      inputRef.current.style.height = 'auto'
     }
     setError('')
-    
-    // Add user message with timestamp
-    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+    const timestamp = new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
     const userMsg = { role: 'user', content: msg, timestamp }
     const newHistory = [...messages, userMsg]
     setMessages(newHistory)
     setLoading(true)
 
     try {
-      // Pass the previous history (minus the just-added message which isn't strictly needed, but let's pass all history up to user msg)
       const data = await sendChatMessage(msg, newHistory)
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: data.answer, citations: data.citations || [], timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+        {
+          role: 'assistant',
+          content: data.answer,
+          citations: data.citations || [],
+          timestamp: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        },
       ])
     } catch (err) {
       const detail =
-        err.response?.data?.detail || err.message || 'Something went wrong. Please try again.'
+        err.response?.data?.detail ||
+        err.message ||
+        'Failed to generate response. Please check your backend connection.'
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: `⚠️ **Error:** ${detail}`, citations: [], isError: true, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+        {
+          role: 'assistant',
+          content: `⚠️ **Retrieval Error:** ${detail}`,
+          citations: [],
+          isError: true,
+          timestamp: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        },
       ])
     } finally {
       setLoading(false)
-      setTimeout(() => inputRef.current?.focus(), 100)
+      setTimeout(() => inputRef.current?.focus(), 50)
     }
   }
 
@@ -85,43 +141,37 @@ export default function ChatWindow({ documents, messages, setMessages, onClearCh
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 relative bg-surface-1">
-      {/* Ambient top glow */}
-      <div className="glow-bg absolute inset-x-0 top-0 h-64 pointer-events-none -z-10 opacity-70" />
+    <div className="flex flex-col flex-1 min-h-0 relative bg-surface-0">
+      {/* Ambient top lighting */}
+      <div className="absolute inset-x-0 top-0 h-64 bg-glow-radial pointer-events-none -z-10" />
 
-      {/* ── Chat Header Options ── */}
-      {messages.length > 0 && (
-        <div className="absolute top-4 right-6 z-10 animate-fade-in">
-          <button
-            onClick={onClearChat}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.04] border border-white/10 hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300 text-xs text-slate-400 transition-all duration-200"
-          >
-            <Trash2 className="w-3.5 h-3.5" /> Clear Chat
-          </button>
-        </div>
-      )}
-
-      {/* ── Messages Thread ── */}
-      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-6 pt-14">
+      {/* ── Chat Messages Scroll Area ── */}
+      <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 space-y-6">
         {messages.length === 0 ? (
-          <WelcomeState hasDocuments={hasDocuments} onQuickPrompt={sendMessage} />
+          <WelcomeState
+            hasDocuments={hasDocuments}
+            documents={documents}
+            onQuickPrompt={sendMessage}
+          />
         ) : (
           messages.map((msg, i) => <MessageBubble key={i} message={msg} />)
         )}
 
-        {/* Loading typing indicator - updated to bouncing dots */}
+        {/* Loading / Generating Thinking State */}
         {loading && (
-          <div className="flex items-center gap-3 animate-fade-in">
-            <div className="flex-none w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500/50 to-violet-500/50 flex items-center justify-center shadow-glow-sm flex-shrink-0 border border-indigo-500/30">
-              <Bot className="w-4 h-4 text-indigo-100 animate-pulse" />
+          <div className="flex items-start gap-3 animate-slide-up max-w-4xl">
+            <div className="flex-none w-8 h-8 rounded-xl bg-gradient-to-br from-brand-500 to-accent-600 flex items-center justify-center shadow-glow-sm flex-shrink-0 mt-0.5">
+              <Bot className="w-4 h-4 text-white animate-pulse" />
             </div>
-            <div className="glass-card px-4 py-3 text-indigo-300 text-sm font-medium flex items-center gap-2">
-              Retrieving context & generating
-              <span className="flex gap-1 ml-1 mt-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-[typingBounce_1.4s_infinite_ease-in-out_both] [animation-delay:-0.32s]"></span>
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-[typingBounce_1.4s_infinite_ease-in-out_both] [animation-delay:-0.16s]"></span>
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-[typingBounce_1.4s_infinite_ease-in-out_both]"></span>
+            <div className="glass-card px-4 py-3.5 bg-surface-2/80 border border-white/[0.08] flex items-center gap-3">
+              <span className="text-xs font-medium text-slate-300">
+                Retrieving vector context & synthesizing answer…
               </span>
+              <div className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-[typingBounce_1.4s_infinite_ease-in-out_both] [animation-delay:-0.32s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-[typingBounce_1.4s_infinite_ease-in-out_both] [animation-delay:-0.16s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-[typingBounce_1.4s_infinite_ease-in-out_both]" />
+              </div>
             </div>
           </div>
         )}
@@ -129,33 +179,45 @@ export default function ChatWindow({ documents, messages, setMessages, onClearCh
         <div ref={bottomRef} />
       </div>
 
-      {/* ── Quick Prompt Chips Above Input ── */}
+      {/* ── Quick Prompt Suggestion Chips (when conversation is active) ── */}
       {hasDocuments && messages.length > 0 && (
-        <div className="px-4 md:px-8 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar border-t border-white/[0.04] bg-white/[0.01]">
-          {QUICK_PROMPTS.map((p) => (
-            <button
-              key={p.label}
-              onClick={() => sendMessage(p.prompt)}
-              disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.03] border border-white/10 hover:border-indigo-500/40 hover:bg-indigo-500/10 text-xs text-slate-300 hover:text-indigo-200 flex-none transition-all duration-200"
-            >
-              <span>{p.icon}</span>
-              <span className="font-medium">{p.label}</span>
-            </button>
-          ))}
+        <div className="px-4 sm:px-8 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar border-t border-white/[0.04] bg-surface-1/40">
+          <span className="text-[10px] uppercase font-bold text-slate-400 flex-none mr-1">
+            Suggested:
+          </span>
+          {QUICK_PROMPTS.map((p) => {
+            const Icon = p.icon
+            return (
+              <button
+                key={p.title}
+                onClick={() => sendMessage(p.prompt)}
+                disabled={loading}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.03] border border-white/[0.08] hover:border-brand-500/40 hover:bg-brand-500/10 text-xs text-slate-300 hover:text-white flex-none transition-all duration-150 disabled:opacity-40"
+              >
+                <Icon className="w-3 h-3 text-brand-400" />
+                <span>{p.title}</span>
+              </button>
+            )
+          })}
         </div>
       )}
 
-      {/* ── Input Area ── */}
-      <div className="p-4 md:px-8 border-t border-white/10 bg-surface-2/90 backdrop-blur-md">
+      {/* ── Input / Composer Bar ── */}
+      <div className="p-4 sm:px-8 border-t border-white/[0.08] bg-surface-1/90 backdrop-blur-xl">
         <div className="max-w-4xl mx-auto">
           {error && (
-            <div className="mb-2 p-2 px-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-300 animate-fade-in">
-              {error}
+            <div className="mb-2 p-2.5 px-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 animate-fade-in flex items-center justify-between">
+              <span>{error}</span>
+              <button
+                onClick={() => setError('')}
+                className="text-rose-400 hover:text-white ml-2 text-xs"
+              >
+                Dismiss
+              </button>
             </div>
           )}
 
-          <div className="relative flex items-end">
+          <div className="relative flex items-end rounded-2xl bg-white/[0.03] border border-white/[0.1] focus-within:border-brand-500/60 focus-within:ring-2 focus-within:ring-brand-500/20 transition-all">
             <textarea
               ref={inputRef}
               rows={1}
@@ -165,30 +227,38 @@ export default function ChatWindow({ documents, messages, setMessages, onClearCh
               disabled={loading}
               placeholder={
                 hasDocuments
-                  ? 'Ask any question about your indexed PDF documents… (Shift+Enter for new line)'
-                  : 'Please upload a PDF or click a Quick Test Sample on the left sidebar to start…'
+                  ? 'Ask any question across your indexed documents… (Shift+Enter for newline)'
+                  : 'Upload a PDF or select a quick test sample on the left to start…'
               }
-              className="w-full bg-white/[0.04] border border-white/15 focus:border-indigo-500/60
-                rounded-2xl pl-4 pr-14 py-3.5 text-sm text-slate-100 placeholder-slate-500
-                focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none transition-all duration-200
-                overflow-hidden"
-              style={{ minHeight: '52px', maxHeight: '120px' }}
+              className="w-full bg-transparent px-4 py-3.5 pr-20 text-xs sm:text-sm text-slate-100 placeholder-slate-400 focus:outline-none resize-none overflow-hidden"
+              style={{ minHeight: '48px', maxHeight: '140px' }}
             />
 
-            <button
-              onClick={() => sendMessage()}
-              disabled={!input.trim() || loading}
-              className="absolute right-2.5 bottom-2.5 p-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600
-                text-white hover:from-indigo-400 hover:to-violet-500 transition-all duration-200
-                disabled:opacity-40 disabled:cursor-not-allowed shadow-glow-sm flex items-center justify-center h-8 w-8"
-            >
-              <Send className="w-4 h-4" />
-            </button>
+            <div className="absolute right-2 bottom-2 flex items-center gap-1.5">
+              {input.length > 0 && (
+                <span className="text-[10px] text-slate-400 font-mono hidden sm:inline mr-1">
+                  {input.length} chars
+                </span>
+              )}
+              <button
+                onClick={() => sendMessage()}
+                disabled={!input.trim() || loading}
+                className="p-2 rounded-xl bg-gradient-to-r from-brand-600 to-accent-600 text-white shadow-brand hover:from-brand-500 hover:to-accent-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center h-8 w-8"
+                title="Send query (Enter)"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
 
-          <p className="text-center text-[10px] text-slate-600 mt-2 font-mono">
-            Powered by Gemini Flash 2.0 · MongoDB Atlas Vector Search (768d)
-          </p>
+          <div className="flex items-center justify-between mt-2 text-[10px] text-slate-400 font-mono px-1">
+            <span className="hidden sm:inline">
+              Press <kbd className="px-1.5 py-0.5 rounded bg-white/[0.06] border border-white/[0.08] text-slate-300">↵ Enter</kbd> to query
+            </span>
+            <span className="mx-auto sm:mx-0">
+              MongoDB Atlas 768d Dense Vectors · Gemini Flash
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -196,75 +266,86 @@ export default function ChatWindow({ documents, messages, setMessages, onClearCh
 }
 
 /* ─── Welcome State ──────────────────────────────────────────────────────── */
-function WelcomeState({ hasDocuments, onQuickPrompt }) {
+function WelcomeState({ hasDocuments, documents = [], onQuickPrompt }) {
   return (
-    <div className="flex flex-col items-center justify-center min-h-[70vh] text-center animate-fade-in px-4">
-      {/* Glow Avatar Header */}
-      <div className="relative mb-6">
-        <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-indigo-500 via-violet-600 to-indigo-700 flex items-center justify-center shadow-brand-lg">
-          <Sparkles className="w-10 h-10 text-white animate-pulse-slow" />
+    <div className="flex flex-col items-center justify-center min-h-[65vh] text-center animate-fade-in px-4 max-w-3xl mx-auto">
+      {/* Animated Brand Avatar Header */}
+      <div className="relative mb-5">
+        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 via-brand-600 to-accent-600 flex items-center justify-center shadow-glow-md">
+          <Sparkles className="w-8 h-8 text-white" />
         </div>
-        <div className="absolute -inset-2 rounded-3xl bg-gradient-to-br from-indigo-500/30 to-violet-500/30 blur-2xl -z-10" />
+        <div className="absolute -inset-2 rounded-2xl bg-brand-500/20 blur-xl -z-10" />
       </div>
 
-      <h2 className="text-2xl md:text-3xl font-extrabold text-slate-100 mb-2 tracking-tight">
-        {hasDocuments ? 'Knowledge Base Indexed & Ready' : 'Welcome to CogniCite AI'}
-      </h2>
-      <p className="text-slate-400 text-sm max-w-md leading-relaxed mb-8">
+      <h2 className="text-xl sm:text-2xl font-extrabold text-white mb-2 tracking-tight">
         {hasDocuments
-          ? 'Ask any question across your uploaded documents or choose a recommended analysis prompt below.'
-          : 'Upload a PDF using the left sidebar — or click any of the 1-Click Sample Test Documents to experience sub-second RAG retrieval.'}
+          ? 'Knowledge Base Indexed & Ready for Inquiries'
+          : 'CogniCite AI — Enterprise Document Intelligence'}
+      </h2>
+      <p className="text-slate-400 text-xs sm:text-sm max-w-lg leading-relaxed mb-8">
+        {hasDocuments
+          ? `Query across ${documents.length} loaded document(s) with sub-second vector retrieval and grounded citations.`
+          : 'Ingest enterprise PDFs, extract semantic text hierarchies, and execute retrieval-augmented generation with verifiable ground truth.'}
       </p>
 
-      {/* Feature Capabilities grid when empty */}
+      {/* When NO documents are loaded: Capabilities grid */}
       {!hasDocuments && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-2xl w-full mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 w-full mb-6">
           {[
-            { icon: BarChart3, label: 'Financial Analytics', desc: 'Revenue, EBITDA & YoY' },
-            { icon: Zap, label: 'System Architecture', desc: 'RAG Stack & Benchmarks' },
-            { icon: Shield, label: 'Security & Privacy', desc: 'AES-256 & Compliance' },
-            { icon: Sparkles, label: 'Gemini Flash 2.0', desc: 'Sub-second LLM answers' },
+            { icon: BarChart3, label: 'Financial Analytics', desc: 'Revenue, YoY & EBITDA' },
+            { icon: Zap, label: 'System Specs', desc: 'RAG Stack & Metrics' },
+            { icon: Shield, label: 'Security & Privacy', desc: 'AES-256 & SOC-2' },
+            { icon: Sparkles, label: 'Grounded Citations', desc: 'Page-level truth trace' },
           ].map((f, idx) => {
             const Icon = f.icon
             return (
               <div
                 key={idx}
-                className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/[0.08] hover:border-indigo-500/40 text-left transition-all duration-300 group"
+                className="p-3.5 rounded-2xl bg-white/[0.02] border border-white/[0.08] hover:border-brand-500/40 text-left transition-all group"
               >
-                <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-2.5 text-indigo-400 group-hover:scale-110 transition-transform">
+                <div className="w-8 h-8 rounded-xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mb-2 text-brand-400 group-hover:scale-105 transition-transform">
                   <Icon className="w-4 h-4" />
                 </div>
-                <p className="text-xs font-bold text-slate-200 group-hover:text-white">{f.label}</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">{f.desc}</p>
+                <p className="text-xs font-bold text-slate-200 group-hover:text-white">
+                  {f.label}
+                </p>
+                <p className="text-[10px] text-slate-400 mt-0.5">{f.desc}</p>
               </div>
             )
           })}
         </div>
       )}
 
-      {/* Quick Prompts Grid when docs are loaded */}
+      {/* When documents ARE loaded: Suggested Prompt Cards */}
       {hasDocuments && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl w-full">
-          {QUICK_PROMPTS.map((p) => (
-            <button
-              key={p.label}
-              onClick={() => onQuickPrompt(p.prompt)}
-              className="flex items-start gap-3 p-4 text-left rounded-2xl
-                bg-white/[0.03] border border-white/[0.08] text-slate-300
-                hover:bg-indigo-500/15 hover:border-indigo-500/40 hover:text-white
-                transition-all duration-200 active:scale-[0.98] group shadow-sm"
-            >
-              <span className="text-xl flex-none group-hover:scale-110 transition-transform">
-                {p.icon}
-              </span>
-              <div>
-                <p className="text-xs font-bold text-slate-200 group-hover:text-indigo-200">
-                  {p.label}
-                </p>
-                <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">{p.prompt}</p>
-              </div>
-            </button>
-          ))}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
+          {QUICK_PROMPTS.map((p) => {
+            const Icon = p.icon
+            return (
+              <button
+                key={p.title}
+                onClick={() => onQuickPrompt(p.prompt)}
+                className="flex items-start gap-3 p-3.5 text-left rounded-2xl
+                  bg-white/[0.02] border border-white/[0.08] hover:border-brand-500/40
+                  hover:bg-brand-500/10 text-slate-300 hover:text-white
+                  transition-all active:scale-[0.99] group shadow-sm"
+              >
+                <div
+                  className={`w-9 h-9 rounded-xl border flex items-center justify-center flex-none group-hover:scale-105 transition-transform ${p.iconColor}`}
+                >
+                  <Icon className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-slate-200 group-hover:text-brand-300">
+                    {p.title}
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-0.5 truncate">
+                    {p.desc}
+                  </p>
+                </div>
+              </button>
+            )
+          })}
         </div>
       )}
     </div>
