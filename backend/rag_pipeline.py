@@ -42,11 +42,18 @@ from models import Citation
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 EMBEDDING_MODELS = [
-    "gemini-embedding-001",  # Primary: stable 768d model (confirmed working)
-    "gemini-embedding-2",    # Newer model fallback
+    "gemini-embedding-001",      # Primary: stable 768d model
+    "gemini-embedding-2-preview",# Fallback preview
+    "gemini-embedding-2",        # Newer model fallback
 ]
 EMBEDDING_DIMS = 768
-LLM_MODEL = "gemini-flash-latest"  # Confirmed available alias for the best flash model
+LLM_MODELS = [
+    "gemini-flash-latest",          # Primary flash model
+    "gemini-flash-lite-latest",     # Fast high-availability fallback
+    "gemini-3.1-flash-lite-preview",# Next-gen fallback
+    "gemini-3-flash-preview",       # Additional fallback
+]
+LLM_MODEL = LLM_MODELS[0]
 
 
 # ---------------------------------------------------------------------------
@@ -91,27 +98,18 @@ class GeminiRESTEmbeddings(Embeddings):
                         data = resp.json()
                         return [e["values"] for e in data.get("embeddings", [])]
                     if resp.status_code == 404:
-                        # 404 from Gemini = invalid API key OR wrong model/endpoint.
-                        # This is a configuration error, not a rate limit — fail fast.
-                        raise RuntimeError(
-                            f"Gemini API returned 404 for model '{model}'. "
-                            "This usually means your GEMINI_API_KEY is invalid, not set, or "
-                            "the model is unavailable in your region. "
-                            "Get a valid key at https://aistudio.google.com/."
-                        )
-                    if resp.status_code == 429:
-                        print(f"⚠️ {model} 429 Rate Limit (attempt {global_attempt + 1}). Trying next model…")
-                        last_error = f"Rate limit (429) on {model}"
-                        time.sleep(2)
+                        continue
+                    if resp.status_code in (429, 503):
+                        print(f"⚠️ {model} {resp.status_code} (attempt {global_attempt + 1}). Trying next model…")
+                        last_error = f"Rate limit / capacity on {model}"
+                        time.sleep(1)
                         continue
                     resp.raise_for_status()
-                except RuntimeError:
-                    raise  # Re-raise fatal config errors immediately
                 except Exception as exc:
                     last_error = exc
                     time.sleep(1)
 
-            # All Gemini models hit 429 → fall back to local FastEmbed ONNX 768d
+            # All Gemini models hit 429/503 → fall back to local FastEmbed ONNX 768d
             try:
                 from fastembed import TextEmbedding
                 print("⚡ Gemini rate-limited. Falling back to local FastEmbed ONNX 768d…")
@@ -129,12 +127,12 @@ class GeminiRESTEmbeddings(Embeddings):
             except Exception as local_err:
                 print(f"⚠️ FastEmbed fallback error: {local_err}")
 
-            print(f"⏳ Waiting 5s for rate-limit reset (pass {global_attempt + 1}/3)…")
-            time.sleep(5)
+            print(f"⏳ Waiting 3s for model capacity reset (pass {global_attempt + 1}/3)…")
+            time.sleep(3)
 
         raise RuntimeError(
-            f"Gemini API Rate Limit or Connection Error: {last_error}. "
-            "Please wait 30 seconds and try again."
+            f"Gemini Embedding API Error: {last_error}. "
+            "Please verify your GEMINI_API_KEY and retry in a moment."
         )
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -144,7 +142,7 @@ class GeminiRESTEmbeddings(Embeddings):
             batch = texts[i : i + batch_size]
             all_embeddings.extend(self._embed_batch_with_fallback(batch))
             if i + batch_size < len(texts):
-                time.sleep(1.2)  # Stay within 15 RPM free-tier limit
+                time.sleep(1.0)
         return all_embeddings
 
     def embed_query(self, text: str) -> List[float]:
@@ -289,16 +287,34 @@ def chat_with_rag(
         "Provide a comprehensive, well-structured answer."
     )
 
-    # Direct REST call to Gemini LLM
-    url = f"{GEMINI_BASE_URL}/{LLM_MODEL}:generateContent"
+    # Direct REST call to Gemini LLM with multi-model resilience
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048},
     }
 
-    resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=90)
-    resp.raise_for_status()
-    data = resp.json()
+    data = None
+    last_err = None
+
+    for model_name in LLM_MODELS:
+        url = f"{GEMINI_BASE_URL}/{model_name}:generateContent"
+        try:
+            resp = requests.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=60)
+            if resp.status_code == 200:
+                data = resp.json()
+                break
+            elif resp.status_code in (429, 503):
+                print(f"⚠️ Model {model_name} returned {resp.status_code}. Falling back to next LLM model…")
+                time.sleep(1)
+                continue
+            else:
+                resp.raise_for_status()
+        except Exception as exc:
+            last_err = exc
+            time.sleep(0.5)
+
+    if not data:
+        raise RuntimeError(f"All Gemini models were unavailable: {last_err}")
 
     answer_text = ""
     try:
