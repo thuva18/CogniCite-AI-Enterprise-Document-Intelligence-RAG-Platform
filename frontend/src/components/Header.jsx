@@ -9,19 +9,28 @@ import { fetchHealth } from '../api.js'
 export default function Header({ documentCount }) {
   const [health, setHealth] = useState({ status: 'checking', mongodb: 'unknown', active_documents: 0 })
   const [pulse, setPulse] = useState(false)
+  const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
     let timerId
     const check = async () => {
       try {
+        setRetrying(false)
         const data = await fetchHealth()
         setHealth(data)
         timerId = setTimeout(check, 5000)
       } catch {
+        // fetchHealth already retried 3x with 8s gaps — backend truly unreachable
+        setRetrying(false)
         setHealth({ status: 'error', mongodb: 'unreachable', active_documents: 0 })
-        timerId = setTimeout(check, 3000)
+        // Retry the whole health cycle every 30s in case Render wakes up later
+        timerId = setTimeout(check, 30000)
       }
+      setRetrying(false)
     }
+
+    // Show "Waking up" state while the first check runs
+    setRetrying(true)
     check()
     return () => clearTimeout(timerId)
   }, [])
@@ -36,8 +45,9 @@ export default function Header({ documentCount }) {
   }, [documentCount])
 
   const isHealthy = health.status === 'healthy'
-  const statusColor = isHealthy ? 'text-emerald-400' : health.status === 'checking' ? 'text-amber-400' : 'text-red-400'
-  const dotColor   = isHealthy ? 'bg-emerald-400' : health.status === 'checking' ? 'bg-amber-400' : 'bg-red-400'
+  const isChecking = health.status === 'checking' || retrying
+  const statusColor = isHealthy ? 'text-emerald-400' : isChecking ? 'text-amber-400' : 'text-red-400'
+  const dotColor   = isHealthy ? 'bg-emerald-400' : isChecking ? 'bg-amber-400' : 'bg-red-400'
 
   return (
     <header className="relative z-20 flex-none h-16 border-b border-white/[0.06] bg-surface-1/80 backdrop-blur-xl">
@@ -83,7 +93,7 @@ export default function Header({ documentCount }) {
             <span className={`w-2 h-2 rounded-full ${dotColor} ${isHealthy ? 'animate-pulse-slow' : ''}`} />
             <Activity className={`w-3.5 h-3.5 ${statusColor}`} />
             <span className={`text-xs font-medium hidden sm:inline ${statusColor}`}>
-              {isHealthy ? 'Connected' : health.status === 'checking' ? 'Checking…' : 'Offline'}
+              {isHealthy ? 'Connected' : isChecking ? 'Waking up…' : 'Offline'}
             </span>
           </div>
         </div>

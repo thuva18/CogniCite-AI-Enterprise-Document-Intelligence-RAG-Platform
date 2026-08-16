@@ -47,6 +47,22 @@ MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 CogniCite AI backend starting…")
+
+    # Validate critical environment variables at startup
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
+    mongo_uri = os.getenv("MONGODB_URI", "")
+
+    if not gemini_key:
+        print("❌ CRITICAL: GEMINI_API_KEY is not set! Upload will fail with 404.")
+        print("❌   Set a valid Gemini API key (get one at https://aistudio.google.com/)")
+    else:
+        print(f"✅ GEMINI_API_KEY is set (starts with '{gemini_key[:6]}...')")
+
+    if not mongo_uri:
+        print("❌ CRITICAL: MONGODB_URI is not set! Database operations will fail.")
+    else:
+        print("✅ MONGODB_URI is set.")
+
     yield
     print("🛑 CogniCite AI backend shutting down.")
 

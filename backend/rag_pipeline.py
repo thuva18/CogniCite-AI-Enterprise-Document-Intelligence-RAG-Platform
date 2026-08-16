@@ -42,11 +42,11 @@ from models import Citation
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 EMBEDDING_MODELS = [
-    "text-embedding-004",
-    "embedding-001",
+    "gemini-embedding-001",  # Primary: stable 768d model (confirmed working)
+    "gemini-embedding-2",    # Newer model fallback
 ]
 EMBEDDING_DIMS = 768
-LLM_MODEL = "gemini-2.0-flash"
+LLM_MODEL = "gemini-flash-latest"  # Confirmed available alias for the best flash model
 
 
 # ---------------------------------------------------------------------------
@@ -90,12 +90,23 @@ class GeminiRESTEmbeddings(Embeddings):
                     if resp.status_code == 200:
                         data = resp.json()
                         return [e["values"] for e in data.get("embeddings", [])]
+                    if resp.status_code == 404:
+                        # 404 from Gemini = invalid API key OR wrong model/endpoint.
+                        # This is a configuration error, not a rate limit — fail fast.
+                        raise RuntimeError(
+                            f"Gemini API returned 404 for model '{model}'. "
+                            "This usually means your GEMINI_API_KEY is invalid, not set, or "
+                            "the model is unavailable in your region. "
+                            "Get a valid key at https://aistudio.google.com/."
+                        )
                     if resp.status_code == 429:
                         print(f"⚠️ {model} 429 Rate Limit (attempt {global_attempt + 1}). Trying next model…")
                         last_error = f"Rate limit (429) on {model}"
                         time.sleep(2)
                         continue
                     resp.raise_for_status()
+                except RuntimeError:
+                    raise  # Re-raise fatal config errors immediately
                 except Exception as exc:
                     last_error = exc
                     time.sleep(1)
